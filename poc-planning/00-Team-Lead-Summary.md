@@ -11,9 +11,9 @@
 
 ## 1. What we're building
 
-A working demonstration of an **autonomous Kubernetes self-healing loop**: the platform watches a cluster, detects a real failure (crash loop, OOM, bad rollout), figures out what's wrong, decides on a safe fix under policy control, executes it, and verifies the app actually recovered — with every step visible on a dashboard in real time.
+A working demonstration of an **observability + autonomous self-healing platform** for Kubernetes: the platform first gives real, live visibility into the cluster (metrics dashboard, no incidents required), and on top of that watches for real failures (crash loop, OOM, bad rollout — and, new, memory pressure building up *before* a crash), figures out what's wrong, decides on a safe fix under policy control, executes it, and verifies the app actually recovered — with every step visible on the same dashboard in real time.
 
-This is the **Observe → Decide → Act → Verify** loop described in the full architecture doc, condensed to a scope 7-8 people can actually finish in 6-8 weeks.
+This is the **Observe → Decide → Act → Verify** loop described in the full architecture doc, condensed to a scope 7-8 people can actually finish in 6-8 weeks — with a real (if lightweight) observability layer underneath it, not just a healing loop assuming one already exists.
 
 ## 2. Why this scope (and not the full document)
 
@@ -28,7 +28,7 @@ For this POC we are deliberately building **only the core of Phase 1**, with the
 | Multi-cluster control plane | Single cluster (kind) |
 | Plugin system (gRPC/WASM), node/network/storage healing | Out of scope |
 | OIDC, OPA/Rego policy | Simple Go policy rules against a `SelfHealingPolicy` CR |
-| Logs + traces pipeline | Kubernetes Events + basic metrics only |
+| Full logs + traces + ClickHouse pipeline | Kubernetes Events + **real metrics via OpenTelemetry Collector → Prometheus** (see §6a) — enough for a genuine observability view, not the full telemetry stack |
 
 This keeps the demo honest: everything we show is real and running, not mocked.
 
@@ -54,9 +54,9 @@ flowchart LR
 
 | Team | Owns | Produces | Consumes |
 |---|---|---|---|
-| **1 — Observe** | Discovery, topology, anomaly detection | `Incident` CR | Kubernetes API |
+| **1 — Observe** | Discovery, topology, anomaly detection, **the observability layer (OpenTelemetry Collector + Prometheus)** | `Incident` CR, cluster metrics | Kubernetes API |
 | **2 — Decide** | Correlation, root-cause ranking, policy | `RemediationPlan` CR | `Incident` CR |
-| **3 — Act & Show** | Action execution, verification, dashboard/API | Resolved/rolled-back state, live UI | `RemediationPlan` CR |
+| **3 — Act & Show** | Action execution, verification, dashboard/API **including a Cluster Health view** | Resolved/rolled-back state, live UI | `RemediationPlan` CR, Team 1's metrics |
 
 Detailed per-team briefs (scope, work items, week-by-week plan) are in separate documents:
 - `01-Team-Observe-Brief.md`
@@ -85,10 +85,20 @@ This single joint session is the highest-leverage hour of the whole project — 
 
 ## 6. Demo (what the architect community will see)
 
-1. We deliberately break a running app in the cluster (bad image, memory limit too low, or a bad rollout).
-2. Within seconds, the dashboard shows an Incident appear, get correlated, get a root cause, and get a remediation plan.
-3. The platform executes the fix (pod restart / rollback / scale) automatically under policy control.
-4. The dashboard shows verification passing and the incident marked Resolved — closing the loop with zero manual intervention.
+1. Dashboard opens on the **Cluster Health view** — real, live metrics, nothing broken. This establishes the platform as a genuine observability tool on its own, before any healing happens.
+2. We deliberately break a running app in the cluster (bad image, memory limit too low, or a bad rollout).
+3. Within seconds, the dashboard shows an Incident appear, get correlated, get a root cause, and get a remediation plan.
+4. The platform executes the fix (pod restart / rollback / scale) automatically under policy control.
+5. The dashboard shows verification passing and the incident marked Resolved — closing the loop with zero manual intervention.
+6. **The differentiating moment:** a workload slowly approaches its memory limit. The dashboard raises a `MemoryTrendWarning` Incident *before* the container crashes — shown side by side with the earlier OOM scenario, which only fired *after* the crash. This is the live answer to "doesn't Kubernetes already self-heal?" (see §6a).
+
+## 6a. Anticipated questions (from the internal review) and how we answer them
+
+**"Kubernetes already restarts crashed pods and replaces failed ones — why do we need this?"**
+Kubernetes' built-in healing is a reflex, not a judgment call: it only asks "is the process alive?" and "does it pass a health check?" It cannot tell that a pod is technically "up" but serving errors, cannot diagnose *why* something is wrong across dependencies, cannot choose a smarter fix than restart (e.g. roll back a bad deploy), and cannot apply company policy about what's safe to automate. It also only ever reacts *after* something has already failed. This platform's memory-trend detector (§6, step 6) is a concrete, demoable example of a failure caught *before* it happens — something Kubernetes structurally cannot do. One line: **Kubernetes heals containers; this platform heals services.**
+
+**"We wanted observability plus self-healing, not just self-healing."**
+Agreed, and this revision addresses it directly: an OpenTelemetry Collector + Prometheus now ship as part of the platform (owned by Team 1), and the dashboard's new Cluster Health view (owned by Team 3) is useful standalone, with zero incidents in progress. Self-healing sits *on top of* real observability now, rather than assuming it exists elsewhere — matching how the source architecture doc always intended it (its Telemetry Plane, §7-8), just scoped down to metrics-only for this POC (logs/traces remain future roadmap).
 
 ## 7. What we get out of this (beyond the demo)
 

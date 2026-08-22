@@ -40,7 +40,22 @@ sequenceDiagram
     UI->>UI: render live timeline
 ```
 
-### 1.3 Why this design matters
+### 1.3 A second detection mechanism: watch vs. poll (new)
+
+Everything above describes **watch-based** detection: react the instant something changes. Team 1 now also runs one **poll-based** detector (Memory Saturation Trend, see `01-Team-Observe-Brief.md` §5a): instead of watching the API Server, it periodically queries Prometheus (every ~30s) for a trend — "has memory usage been climbing toward the limit for the last N minutes?"
+
+This is a deliberately different mechanism, not a variant of the same one:
+
+| | Watch-based (existing detectors) | Poll-based (Memory Saturation Trend) |
+|---|---|---|
+| Talks to | API Server (long-lived connection) | Prometheus (periodic HTTP query) |
+| Fires on | A discrete state change (crashed, restarted) | A trend crossing a threshold over time |
+| Timing | Instant | Every ~30s |
+| Catches problems... | ...after they've already happened | ...before they happen |
+
+Both mechanisms end at the same place — creating an `Incident` CR — so nothing downstream (Team 2, Team 3) needs to know or care which mechanism produced it.
+
+### 1.4 Why this design matters
 
 - Teams only need to agree on **note shape** (the CRD schema), never on each other's internal code.
 - Any team's controller can be restarted, redeployed, or rewritten without touching the other two.

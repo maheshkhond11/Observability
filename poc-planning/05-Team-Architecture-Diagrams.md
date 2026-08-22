@@ -2,6 +2,8 @@
 
 Companion diagrams to `01-Team-Observe-Brief.md`, `02-Team-Decide-Brief.md`, `03-Team-Act-Brief.md`.
 
+**Update:** Team 1 and Team 3 diagrams below now include the observability layer (OpenTelemetry Collector → Prometheus) and the new metrics-based Memory Saturation Trend detector, added in response to team feedback — see `06-Platform-Mechanism-And-AI-Integration.md` and the updated team briefs.
+
 ---
 
 ## Team 1 — Observe
@@ -12,15 +14,22 @@ flowchart TB
         Pods[Pods]
         Deploys[Deployments / ReplicaSets]
         Events[Kubernetes Events]
+        Kubelet[kubelet / cAdvisor metrics]
+    end
+
+    subgraph Obs[Observability layer - new]
+        OTel[OpenTelemetry Collector]
+        Prom[(Prometheus)]
     end
 
     subgraph Observe[Team 1: Observe Controller]
         Informers[Informers / Watchers]
         Topo[Topology Builder]
-        Detectors[Threshold Detectors]
+        Detectors[Event-based Detectors]
+        MetricDet[Metrics-based Detector\npolls Prometheus every ~30s]
     end
 
-    subgraph Detect[Detectors]
+    subgraph Detect[Event-based detectors - reactive]
         D1[CrashLoopBackOff]
         D2[OOMKilled]
         D3[RestartSpike]
@@ -28,25 +37,34 @@ flowchart TB
         D5[Bad Rollout - stretch]
     end
 
+    subgraph DetectM[Metrics-based detector - predictive, new]
+        D6[Memory Saturation Trend]
+    end
+
     Pods --> Informers
     Deploys --> Informers
     Events --> Informers
+    Kubelet --> OTel --> Prom
     Informers --> Topo
     Informers --> Detectors
+    Prom --> MetricDet
     Detectors --> D1
     Detectors --> D2
     Detectors --> D3
     Detectors --> D4
     Detectors --> D5
+    MetricDet --> D6
 
     D1 --> Incident[(Incident CR\nstatus: Observed)]
     D2 --> Incident
     D3 --> Incident
     D4 --> Incident
     D5 --> Incident
+    D6 -->|catches it BEFORE the crash| Incident
 
     Topo -. enriches .-> Incident
     Incident --> Downstream[To Team 2: Decide]
+    Prom --> DashFeed[To Team 3: Cluster Health view]
 ```
 
 ---
@@ -90,6 +108,7 @@ flowchart TB
 ```mermaid
 flowchart TB
     Plan[(RemediationPlan CR\nstatus: Pending / Remediating)]
+    Prom[(Prometheus\nfrom Team 1)]
 
     subgraph Act[Team 3: Act Controller]
         Watch[Watch RemediationPlans]
@@ -121,8 +140,10 @@ flowchart TB
     Rollback --> API
     Escalated --> API
     Plan --> API
+    Prom --> API
 
-    API --> Dashboard[Dashboard\nincident list + live timeline]
+    API --> Dashboard1[Dashboard: Incident list + live timeline]
+    API --> Dashboard2[Dashboard: Cluster Health view - new]
 ```
 
 ---
@@ -131,9 +152,10 @@ flowchart TB
 
 ```mermaid
 flowchart LR
-    subgraph T1[Team 1: Observe]
+    subgraph T1[Team 1: Observe + Observability layer]
         direction TB
         O1[Watchers + Topology + Detectors]
+        O1b[OTel Collector + Prometheus]
     end
     subgraph T2[Team 2: Decide]
         direction TB
@@ -148,5 +170,7 @@ flowchart LR
     T1 -->|Incident CR| T2
     T2 -->|RemediationPlan CR| T3
     T3 -->|kubectl actions| Cluster
-    T3 --> UI[Live Dashboard]
+    T1 -->|live metrics| T3
+    T3 --> UI1[Dashboard: Incident timeline]
+    T3 --> UI2[Dashboard: Cluster Health view]
 ```

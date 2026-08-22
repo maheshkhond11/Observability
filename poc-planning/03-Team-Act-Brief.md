@@ -3,9 +3,9 @@
 **Reference:** Full architecture doc `Observability-POC-SPARK-info.md`, sections 15 (Action Engine), 16 (Verification Engine), 22 (REST API), 23 (Dashboard).
 **Team size:** ~2-3 engineers.
 **Language:** Go (Gin/Echo) for API/controller, any lightweight frontend for the dashboard.
-**You own:** actually fixing the problem, checking it worked, and showing the whole loop live. This is the team the demo hinges on visually — budget real time for the dashboard, not just the backend.
+**You own:** actually fixing the problem, checking it worked, and showing the whole loop live — including the cluster's general observability view, not just the incident timeline. This is the team the demo hinges on visually — budget real time for the dashboard, not just the backend.
 **You produce:** executed actions, verified outcomes, and the live UI.
-**You depend on:** `RemediationPlan` CRs from Team 2 (build against hand-written sample CRs until their controller is ready).
+**You depend on:** `RemediationPlan` CRs from Team 2 (build against hand-written sample CRs until their controller is ready), and Prometheus from Team 1 (for the Cluster Health view, §7).
 
 ---
 
@@ -20,7 +20,7 @@ Watch approved `RemediationPlan` CRs, execute exactly one of three safe actions 
 - Basic guardrails: a dry-run flag, a max-blast-radius check (e.g. never act on more than N pods at once), a structured audit log line per action.
 - A verification loop: after acting, poll workload health (pod Ready condition, restart count stabilized) for up to M minutes, then set `status.phase` to `Resolved`, `Rollback`, or `Escalated`.
 - A REST API exposing `GET /incidents`, `GET /plans`, `GET /topology` — read directly from the Kubernetes API via client-go. No Postgres/ClickHouse for this POC.
-- A minimal dashboard: incident list, incident detail with the full lifecycle timeline, and a live-updating view during the demo.
+- A minimal dashboard: incident list, incident detail with the full lifecycle timeline, a **Cluster Health view** sourced from Team 1's Prometheus, and a live-updating view during the demo.
 - The failure-injection demo script (`kubectl apply` broken workloads) and a rehearsed demo flow.
 
 ## 3. Out of scope
@@ -65,6 +65,7 @@ GET /api/v1/incidents            -> list Incident CRs across watched namespaces
 GET /api/v1/incidents/{name}     -> one Incident with its linked RemediationPlan
 GET /api/v1/plans                -> list RemediationPlan CRs
 GET /api/v1/topology              -> current in-memory topology (from Team 1, or re-derived here if simpler)
+GET /api/v1/metrics/summary       -> a few pre-picked PromQL queries proxied from Prometheus (cluster CPU/memory, per-namespace memory saturation) for the Cluster Health view
 GET /healthz, /readyz, /metrics
 ```
 
@@ -75,9 +76,10 @@ Read-only is enough — all mutations happen via `kubectl` against CRs during th
 Minimum viable screens:
 1. **Incident list** — table of active/recent incidents with severity and current phase.
 2. **Incident detail** — the lifecycle timeline (Observed → Correlated → Analyzing → Remediating → Verifying → Resolved/Escalated) rendered as a horizontal stepper, updating live (poll every 2-3s is fine, no need for websockets).
-3. *(stretch)* **Topology view** — a simple graph of the affected workload and its dependencies.
+3. **Cluster Health view (new)** — a small set of live charts (CPU/memory per namespace, per-pod memory-vs-limit) sourced from `/api/v1/metrics/summary`. This is the "observability" half the team asked for — it's useful on its own, with zero incidents happening, which is exactly the point: the platform is a real monitoring tool first, and a self-healer on top of it.
+4. *(stretch)* **Topology view** — a simple graph of the affected workload and its dependencies.
 
-Prioritize #1 and #2 — they alone tell the whole story live in the demo.
+Prioritize #1, #2, and #3 — together they tell the whole story live in the demo: here's what's happening in the cluster right now (#3), here's something going wrong (#1), here's the full resolution (#2).
 
 ## 8. Week-by-week
 
@@ -87,7 +89,7 @@ Prioritize #1 and #2 — they alone tell the whole story live in the demo.
 | 2 | RestartPod + ScaleDeployment implemented and tested against kind. |
 | 3 | RollbackDeployment implemented. Verification loop working for all three. |
 | 4 | REST API skeleton + incident list screen. |
-| 5 | Incident detail/timeline screen; real integration with Team 2's live plans. |
+| 5 | Incident detail/timeline screen; real integration with Team 2's live plans. Cluster Health view wired to Team 1's Prometheus. |
 | 6 | Bug-bash, blast-radius guardrails, audit logging polish. |
 | 7 | Demo script finalized, full dry-run rehearsal with all 3 teams. |
 
@@ -97,10 +99,13 @@ Prioritize #1 and #2 — they alone tell the whole story live in the demo.
 - The dashboard shows an incident's full timeline updating live without a page refresh.
 - A deliberately unrecoverable scenario correctly reaches `Escalated` rather than hanging or crashing the controller.
 - Blast-radius guardrail demonstrably blocks/limits an action targeting more than N pods.
+- The Cluster Health view shows real, live-updating metrics with no incidents in progress — proving the platform stands on its own as an observability tool, not only as a healing loop.
 
 ## 10. The full demo script (own this, coordinate with both other teams)
 
-1. Apply a broken workload (bad image or low memory limit) to the kind cluster.
-2. Dashboard shows: Incident appears (Team 1) → correlated → root cause + plan shown (Team 2) → action executed → verifying → Resolved (your team).
-3. Second scenario: a bad rollout that requires approval — show the plan waiting in `AwaitingApproval`, a teammate approves via `kubectl patch`, then the rollback executes and resolves.
-4. Total demo time target: under 5 minutes end-to-end for both scenarios combined.
+1. Open on the **Cluster Health view** with nothing broken — establishes this is a real observability tool first, not just a healing gimmick.
+2. Apply a broken workload (bad image or low memory limit) to the kind cluster.
+3. Dashboard shows: Incident appears (Team 1) → correlated → root cause + plan shown (Team 2) → action executed → verifying → Resolved (your team).
+4. Second scenario: a bad rollout that requires approval — show the plan waiting in `AwaitingApproval`, a teammate approves via `kubectl patch`, then the rollback executes and resolves.
+5. Third scenario (the "why not just Kubernetes" answer): apply a workload that slowly climbs toward its memory limit. Show the `MemoryTrendWarning` Incident appearing on the Cluster Health view **before** the pod ever crashes — side by side with the earlier `OOMKilled` scenario, which only fired after the crash. This contrast is the single strongest live moment in the demo.
+6. Total demo time target: under 6-7 minutes end-to-end for all three scenarios combined.
